@@ -251,6 +251,51 @@ def recompute_risk_scores():
 
 
 # ---------------------------------------------------------------------------
+# Task: OSM Road Network Ingestion (Weekly on Sundays at 1:00 AM IST)
+# ---------------------------------------------------------------------------
+
+@app.task(
+    name="ingestion.tasks.ingest_osm_roads",
+    bind=True,
+    max_retries=3,
+    default_retry_delay=300,
+    soft_time_limit=900,
+    time_limit=1200,
+)
+def ingest_osm_roads(self, regions=None):
+    """
+    Weekly ingestion of pedestrian-walkable ways, street lighting, and sidewalks
+    from OpenStreetMap for Delhi and Sonipat pilot regions.
+    """
+    from ingestion.road_adapter import OSMRoadAdapter, REGIONS
+    from app.db.session import async_session_factory
+    from app.db.road_repository import RoadRepository
+
+    target_regions = regions or list(REGIONS.keys())
+    logger.info("Starting OSM road network ingestion for regions: %s", target_regions)
+
+    adapter = OSMRoadAdapter()
+    total_upserted = 0
+
+    async def _ingest():
+        nonlocal total_upserted
+        async with async_session_factory() as session:
+            for region in target_regions:
+                segments = await adapter.fetch_region_roads(region)
+                count = await RoadRepository.upsert_batch(session, segments)
+                total_upserted += count
+                logger.info("Upserted %d road segments for %s", count, region)
+
+    try:
+        run_async(_ingest())
+    except Exception as exc:
+        logger.error("OSM road network ingestion failed: %s", exc, exc_info=True)
+        raise self.retry(exc=exc)
+
+    return {"status": "success", "total_upserted": total_upserted}
+
+
+# ---------------------------------------------------------------------------
 # Task: Expire Old Incidents (Nightly at 4 AM IST)
 # ---------------------------------------------------------------------------
 
@@ -278,6 +323,11 @@ app.conf.beat_schedule = {
     "osm-nightly-ingestion": {
         "task": "ingestion.tasks.ingest_osm_facilities",
         "schedule": crontab(hour=0, minute=30),          # 12:30 AM IST
+        "kwargs": {"regions": ["delhi", "sonipat"]},
+    },
+    "osm-weekly-roads-ingestion": {
+        "task": "ingestion.tasks.ingest_osm_roads",
+        "schedule": crontab(day_of_week="sunday", hour=1, minute=0),  # 1 AM IST Sundays
         "kwargs": {"regions": ["delhi", "sonipat"]},
     },
     "weather-refresh-hourly": {

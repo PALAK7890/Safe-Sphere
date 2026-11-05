@@ -16,6 +16,7 @@ from app.api.facilities import router as facilities_router
 from app.api.incidents import router as incidents_router
 from app.api.weather import router as weather_router
 from app.api.sources import router as sources_router
+from app.api.routing import router as routing_router
 
 logger = logging.getLogger(__name__)
 
@@ -71,6 +72,8 @@ app.include_router(incidents_router,  prefix="/api/v1/incidents",  tags=["Incide
 app.include_router(weather_router,    prefix="/api/v1/weather",    tags=["Weather"])
 app.include_router(sources_router,    prefix="/api/v1/sources",      tags=["Data Sources"])
 app.include_router(sources_router,    prefix="/api/v1/data-sources", tags=["Data Sources"])
+app.include_router(routing_router,    prefix="/api/v1",              tags=["Routing & Roads"])
+
 
 # ---------------------------------------------------------------------------
 # Root

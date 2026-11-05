@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime, timezone
-from typing import List, Optional
+from typing import Any, List, Optional
 
 from geoalchemy2 import Geometry
 from sqlalchemy import (
@@ -132,6 +132,26 @@ verification_event_type_enum = PGEnum(
     "escalated",
     "auto_expired",
     name="verification_event_type_enum",
+    create_type=False,
+)
+
+lit_status_enum = PGEnum(
+    "yes",
+    "no",
+    "24/7",
+    "automatic",
+    "unknown",
+    name="lit_status_enum",
+    create_type=False,
+)
+
+sidewalk_status_enum = PGEnum(
+    "both",
+    "left",
+    "right",
+    "no",
+    "unknown",
+    name="sidewalk_status_enum",
     create_type=False,
 )
 
@@ -344,3 +364,44 @@ class IncidentVerificationEventORM(Base):
     incident: Mapped[IncidentReportORM] = relationship(
         "IncidentReportORM", back_populates="verification_events"
     )
+
+
+class RoadNetworkMetadataORM(Base):
+    """
+    Road network segments with pedestrian walkability, lighting, sidewalk,
+    and aggregate safety score metadata.
+    """
+
+    __tablename__ = "road_network_metadata"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        PGUUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    osm_way_id: Mapped[int] = mapped_column(BigInteger, unique=True, nullable=False)
+    name: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    highway: Mapped[str] = mapped_column(String(50), nullable=False)
+    surface: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    lanes: Mapped[Optional[int]] = mapped_column(SmallInteger, nullable=True)
+    maxspeed: Mapped[Optional[int]] = mapped_column(SmallInteger, nullable=True)
+    lit: Mapped[Optional[str]] = mapped_column(lit_status_enum, nullable=True)
+    sidewalk: Mapped[Optional[str]] = mapped_column(sidewalk_status_enum, nullable=True)
+    oneway: Mapped[Optional[bool]] = mapped_column(Boolean, nullable=True)
+    access: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    geometry: Mapped[Any] = mapped_column(
+        Geometry(geometry_type="LINESTRING", srid=4326), nullable=False
+    )
+    length_m: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    district: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    incident_count_30d: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    incident_count_90d: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    safety_score: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    safety_score_updated_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    source_fetched_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
