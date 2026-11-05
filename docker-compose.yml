@@ -1,0 +1,132 @@
+# SafeSphere AI — Docker Compose (Development)
+# Usage:
+#   cp .env.example .env   # fill in your real keys
+#   docker compose up -d
+#   docker compose exec api alembic upgrade head
+
+version: "3.9"
+
+services:
+
+  # ──────────────────────────────────────────────
+  # PostgreSQL + PostGIS
+  # ──────────────────────────────────────────────
+  db:
+    image: postgis/postgis:16-3.4
+    container_name: safesphere_db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-safesphere_db}
+      POSTGRES_USER: ${POSTGRES_USER:-safesphere}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-CHANGE_ME}
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./migrations:/docker-entrypoint-initdb.d  # auto-runs *.sql on first init
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-safesphere} -d ${POSTGRES_DB:-safesphere_db}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ──────────────────────────────────────────────
+  # pgvector extension setup (runs once after db)
+  # ──────────────────────────────────────────────
+  db-setup:
+    image: postgis/postgis:16-3.4
+    container_name: safesphere_db_setup
+    depends_on:
+      db:
+        condition: service_healthy
+    entrypoint: >
+      bash -c "
+        psql postgresql://${POSTGRES_USER:-safesphere}:${POSTGRES_PASSWORD:-CHANGE_ME}@db:5432/${POSTGRES_DB:-safesphere_db}
+          -c 'CREATE EXTENSION IF NOT EXISTS vector;'
+          -c 'CREATE EXTENSION IF NOT EXISTS pg_trgm;'
+          -c 'CREATE EXTENSION IF NOT EXISTS unaccent;'
+      "
+    restart: "no"
+
+  # ──────────────────────────────────────────────
+  # Redis (Celery broker + result backend)
+  # ──────────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    container_name: safesphere_redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  # ──────────────────────────────────────────────
+  # FastAPI Backend
+  # ──────────────────────────────────────────────
+  api:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: safesphere_api
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-safesphere}:${POSTGRES_PASSWORD:-CHANGE_ME}@db:5432/${POSTGRES_DB:-safesphere_db}
+      REDIS_URL: redis://redis:6379/0
+    ports:
+      - "8001:8000"
+    volumes:
+      - ./backend:/app
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+
+  # ──────────────────────────────────────────────
+  # Celery Worker (background ingestion jobs)
+  # ──────────────────────────────────────────────
+  worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: safesphere_worker
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-safesphere}:${POSTGRES_PASSWORD:-CHANGE_ME}@db:5432/${POSTGRES_DB:-safesphere_db}
+      REDIS_URL: redis://redis:6379/0
+    volumes:
+      - ./backend:/app
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    command: celery -A ingestion.tasks worker --loglevel=info --concurrency=2
+
+  # ──────────────────────────────────────────────
+  # Celery Beat (scheduler for nightly jobs)
+  # ──────────────────────────────────────────────
+  beat:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: safesphere_beat
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-safesphere}:${POSTGRES_PASSWORD:-CHANGE_ME}@db:5432/${POSTGRES_DB:-safesphere_db}
+      REDIS_URL: redis://redis:6379/0
+    volumes:
+      - ./backend:/app
+    depends_on:
+      - redis
+    command: celery -A ingestion.tasks beat --loglevel=info
+
+volumes:
+  pgdata:
